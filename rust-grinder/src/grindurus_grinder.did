@@ -1,0 +1,40 @@
+type Operation = variant {
+    LongBuy;
+    LongSell;
+    HedgeSell;
+    HedgeRebuy;
+    Rebalance;
+    Invest;
+    Divest;
+};
+
+type Intent = record {
+    account: principal;
+    expire: nat64;
+    pool_ids: vec nat64;
+};
+
+type Position = record {
+    number: nat64;
+    number_max: nat64;
+    price_min: text;
+    price_max: text;
+    active_capital: text;
+};
+
+type PoolPosition = record {
+    long: Position;
+    hedge: Position;
+};
+
+type GasConfig = record {
+    multiplier_numerator: nat64;
+    multiplier_denominator: nat64;
+};
+
+service : {
+    "get_eth_price": () -> (float64) query;
+    "update_eth_price": () -> (variant { Ok: float64; Err: text });
+    "get_intent": (principal) -> (opt Intent) query;
+    "index_all_intent_nft": () -> (variant { Ok: vec Intent; Err: text });
+}

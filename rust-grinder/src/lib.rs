@@ -1,11 +1,12 @@
 use candid::{CandidType, Deserialize, Principal};
-use ic_cdk::api::management_canister::http_request::{HttpResponse, TransformArgs};
+use ic_cdk::api::management_canister::http_request::{CanisterHttpRequestArgument, HttpMethod, HttpResponse, TransformArgs};
 use ic_cdk_macros::*;
 use ic_stable_structures::memory_manager::{MemoryId, MemoryManager, VirtualMemory};
-use ic_stable_structures::{DefaultMemoryImpl, StableBTreeMap, Storable};
+use ic_stable_structures::{DefaultMemoryImpl, StableBTreeMap, Storable, BoundedStorable};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::borrow::Cow;
 
 // Operation types matching the original JavaScript enum
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
@@ -19,7 +20,23 @@ pub enum Operation {
     Divest = 6,
 }
 
-// Core types
+// Implement stable storage for Principal
+impl Storable for Principal {
+    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+        Cow::Owned(self.as_slice().to_vec())
+    }
+
+    fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+        Principal::from_slice(&bytes)
+    }
+}
+
+impl BoundedStorable for Principal {
+    const MAX_SIZE: u32 = 29;
+    const IS_FIXED_SIZE: bool = false;
+}
+
+// Core types with stable storage implementations
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
 pub struct Intent {
     pub account: Principal,
@@ -27,6 +44,46 @@ pub struct Intent {
     pub pool_ids: Vec<u64>,
 }
 
+impl Storable for Intent {
+    fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
+        let mut bytes = vec![];
+        bytes.extend_from_slice(&self.account.as_slice());
+        bytes.extend_from_slice(&self.expire.to_le_bytes());
+        bytes.extend_from_slice(&(self.pool_ids.len() as u64).to_le_bytes());
+        for id in &self.pool_ids {
+            bytes.extend_from_slice(&id.to_le_bytes());
+        }
+        Cow::Owned(bytes)
+    }
+
+    fn from_bytes(bytes: std::borrow::Cow<[u8]>) -> Self {
+        let mut pos = 0;
+        let account = Principal::from_slice(&bytes[pos..pos + 29]);
+        pos += 29;
+        let expire = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+        pos += 8;
+        let len = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap()) as usize;
+        pos += 8;
+        let mut pool_ids = Vec::with_capacity(len);
+        for _ in 0..len {
+            let id = u64::from_le_bytes(bytes[pos..pos + 8].try_into().unwrap());
+            pool_ids.push(id);
+            pos += 8;
+        }
+        Self {
+            account,
+            expire,
+            pool_ids,
+        }
+    }
+}
+
+impl BoundedStorable for Intent {
+    const MAX_SIZE: u32 = 1024; // Adjust this value based on your needs
+    const IS_FIXED_SIZE: bool = false;
+}
+
+// Position
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
 pub struct Position {
     pub number: u64,
@@ -36,6 +93,7 @@ pub struct Position {
     pub active_capital: String,
 }
 
+// Pool position
 #[derive(CandidType, Serialize, Deserialize, Clone, Debug)]
 pub struct PoolPosition {
     pub long: Position,
@@ -80,14 +138,16 @@ fn get_eth_price() -> f64 {
 
 #[update]
 async fn update_eth_price() -> Result<f64, String> {
-    let url = "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd";
-    
-    match ic_cdk::api::management_canister::http_request::http_request(
-        url.into(),
-        "GET".into(),
-        None,
-        vec![],
-    ).await {
+    let request = CanisterHttpRequestArgument {
+        url: "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd".to_string(),
+        method: HttpMethod::GET,
+        body: None,
+        max_response_bytes: None,
+        transform: None,
+        headers: vec![],
+    };
+
+    match ic_cdk::api::management_canister::http_request::http_request(request).await {
         Ok((response,)) => {
             if response.status == 200 {
                 if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&response.body) {
@@ -99,7 +159,7 @@ async fn update_eth_price() -> Result<f64, String> {
             }
             Ok(2700.0) // Default fallback price
         }
-        Err(e) => Err(format!("Failed to fetch ETH price: {}", e))
+        Err(e) => Err(format!("Failed to fetch ETH price: {:?}", e))
     }
 }
 
