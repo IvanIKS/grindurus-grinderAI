@@ -21,7 +21,7 @@ pub enum Operation {
 }
 
 // Implement stable storage for Principal
-impl Storable for Principal {
+impl Storable {
     fn to_bytes(&self) -> std::borrow::Cow<[u8]> {
         Cow::Owned(self.as_slice().to_vec())
     }
@@ -31,7 +31,7 @@ impl Storable for Principal {
     }
 }
 
-impl BoundedStorable for Principal {
+impl BoundedStorable {
     const MAX_SIZE: u32 = 29;
     const IS_FIXED_SIZE: bool = false;
 }
